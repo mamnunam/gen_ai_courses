@@ -243,7 +243,108 @@ repetition_penalty=1.3:
 
 ---
 
+## Peaked vs Flat Distributions
+
+The intuition behind sampling parameters: every parameter reshapes how *peaked* or *flat* the next-token distribution is.
+
+```
+PEAKED:                              FLAT:
+"The sky is..."                      "The sky is..."
+  blue   ████████████████  50%        turbid     ███ 3.0%
+  bright ████████          25%        red        ███ 2.9%
+  clear  ████              10%        crepuscular███ 2.9%
+  ...                                 crimson    ███ 2.8%
+                                      green      ██  2.4%
+                                      cheese     ██  2.3%
+                                      ...
+```
+
+A *peaked* distribution means the model is **confident** — there's one obvious next token. A *flat* distribution means the model is **uncertain** — many tokens are roughly equally plausible.
+
+| Parameter | Effect on shape |
+|-----------|----------------|
+| **Temperature ↓** | Sharpens (peakier) — confident tokens dominate more |
+| **Temperature ↑** | Flattens — long-tail tokens get probability |
+| **Top-k** | Caps to k most likely tokens regardless of shape |
+| **Top-p** | Adapts to shape — fewer tokens when peaked, more when flat |
+| **Repetition penalty** | Manually flattens already-used tokens |
+| **Logit bias** | Manually shifts specific tokens up or down |
+
+---
+
+## Greedy Decoding Failure: The Loop
+
+With `temperature=0` (greedy) the model can fall into repetition loops because the most probable next token never breaks the pattern:
+
+```
+prompt: "Summarize the findings:"
+output: "...which the data confirms, which the data confirms, which the data confirms..."
+```
+
+Common in **code completion** and **factual extraction**, where greedy is otherwise the right choice. Mitigations:
+
+1. Add a small repetition penalty (`1.1–1.2`).
+2. Use top-p ~ 0.1–0.3 with low temperature instead of pure greedy.
+3. Set `frequency_penalty` (OpenAI-compatible) to penalize already-used tokens.
+
+---
+
+## Logit Biases
+
+A direct, per-token override of the model's probability distribution. Distinct from temperature/top-p (which reshape *all* tokens) — logit bias targets specific token IDs.
+
+```python
+# Pseudocode using OpenAI-compatible API
+response = client.chat.completions.create(
+    model="...",
+    messages=messages,
+    logit_bias={
+        12345: -100,   # token id for "poop" — effectively ban
+        6789:  +5,     # token id for "ACCEPT" — boost for a classifier
+        9012:  +5      # token id for "REJECT" — boost the other class
+    }
+)
+```
+
+**Use cases:**
+
+- **Filter profanity** — strongly negative bias on a banned-word list (never selected).
+- **Constrain classifier output** — strongly positive bias on the valid label tokens.
+- **Force formatted output** — bias toward JSON delimiter tokens.
+
+Logit bias is **per-token-ID**, so you need to know the model's tokenizer to use it well.
+
+---
+
+## Recommended Tuning Workflow
+
+The course suggests this order when tuning a new task:
+
+1. **Pick temperature + top-p first** based on task type (use the table at the top of this note as a starting point).
+2. **Layer in repetition penalty / frequency penalty** only if you see actual repetition issues.
+3. **Add logit biases last**, for very specific constraints (banned words, classification labels).
+
+```
+Tune in this order:
+  temperature → top-p → repetition penalty → logit bias
+  (each new tool adds complexity; don't reach for it without a reason)
+```
+
+A concrete example from the course materials, using Llama-2-70b for a balanced creative task:
+
+```python
+params = {
+    "model":              "meta-llama/Llama-2-70b-hf",
+    "temperature":        0.8,    # slightly conservative in token choice
+    "top_p":              0.9,    # avoid choosing from far tail of distribution
+    "repetition_penalty": 1.2     # lightly penalize repeated tokens
+}
+```
+
+---
+
 ## See Also
 
 - [[RAG_Prompt_Engineering]] — using these parameters in a routing architecture
 - [[RAG_Production]] — tracking token costs across all LLM calls
+- [[RAG_Transformers]] — how the probability distribution is computed in the first place
