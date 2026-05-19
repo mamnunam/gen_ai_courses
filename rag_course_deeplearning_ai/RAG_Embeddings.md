@@ -221,8 +221,94 @@ The model learns statistical co-occurrence, not world knowledge. This is why:
 
 ---
 
+## Three Levels of Embedding
+
+Embedding models exist at multiple granularities. Choose by what you want to compare:
+
+| Level | Model class | Typical use |
+|-------|------------|-------------|
+| **Word** | `word2vec`, `GloVe` | Single-word similarity, analogies |
+| **Sentence** | `sentence-transformers` family (e.g., `bge-base-en-v1.5`) | Query–document similarity in RAG |
+| **Document** | Doc2Vec, mean-pooled sentence embeddings | Whole-document clustering / topic modeling |
+
+RAG almost always uses **sentence-level** models, since both queries and chunks tend to be sentence-to-paragraph length.
+
+---
+
+## How Embedding Models Learn — Contrastive Training
+
+Embedding models are trained on **(positive pair, negative pair)** examples:
+
+- **Positive pair**: two semantically similar strings — `"Good morning"` / `"Hello"`.
+- **Negative pair**: two unrelated strings — `"Good morning"` / `"That's a noisy trombone"`.
+
+The training loop:
+
+```
+Embed → Score similarity → Update parameters → Evaluate → Repeat
+```
+
+The model is rewarded for pushing positive pairs **closer** and negative pairs **farther apart** in vector space.
+
+```
+Phase 0 (random init)     →  Vectors scattered, no structure
+Phase 1 (mid-training)    →  Push/pull forces visible
+Phase N (trained)         →  Topical clusters form
+```
+
+After millions of training pairs in a 100–1000 dimensional space, the model has "room" to cluster topics distinctly. **Key implication:** only vectors produced by the *same* embedding model can be meaningfully compared.
+
+---
+
+## Three Distance Metrics
+
+Cosine and Euclidean are covered above. The third is **dot product**:
+
+$$\mathbf{q} \cdot \mathbf{d} = \sum_{j=1}^{n} q_j \cdot d_j$$
+
+Geometrically: the length of one vector's projection onto the other. It is the un-normalized form of cosine similarity.
+
+| Metric | Range | Direction | Magnitude-sensitive? | When to use |
+|--------|-------|-----------|---------------------|-------------|
+| **Cosine** | [−1, 1] | Higher = closer | No (normalized) | Default for RAG semantic search |
+| **Euclidean** | [0, ∞) | Lower = closer | Yes | When vector magnitudes are meaningful (rare in RAG) |
+| **Dot product** | (−∞, ∞) | Higher = closer | Yes | Sometimes preferred for normalized embeddings (faster, equivalent to cosine) |
+
+Many vector databases (Weaviate included) let you pick the distance metric at collection-creation time. Cosine is the safe default.
+
+---
+
+## Failure Mode: Embeddings Capture Co-occurrence, Not Truth
+
+A query `"Suggest great places to visit in Asia"` against a list including *Kyoto, Santorini, Banff, Maldives, etc.* will often rank **Santorini** above **Kyoto** — even though Kyoto is actually in Asia.
+
+Why? Because the embedding model learned from text on the web, where:
+
+- "Places to visit" + "Santorini" co-occur extremely often (travel content)
+- "Kyoto" appears more often in cultural/historical contexts
+- The model learned *statistical co-occurrence*, not *world knowledge*
+
+**Practical consequences:**
+
+1. **BM25 still has value** — exact keyword/entity matches catch what semantic search misses.
+2. **Hybrid retrieval (RRF) is the safe default** — combining both reduces this failure mode. See [[RAG_Retrieval_Methods]].
+3. **Domain-specific fine-tuning** of the embedding model can improve quality for specialized corpora (legal, medical, code).
+
+---
+
+## Two Roles of Embeddings in RAG
+
+Beyond the obvious retrieval role, embeddings show up in a second place — the LLM itself. The course frames it as:
+
+1. **Powering search** — comparing query and document vectors to find relevant context.
+2. **Understanding context inside the LLM** — the first layer of a transformer is itself an embedding layer that turns tokens into vectors. See [[RAG_Transformers]] for how this propagates through attention and feed-forward layers.
+
+---
+
 ## See Also
 
 - [[RAG_Retrieval_Methods]] — using embeddings in BM25, semantic search, and RRF
 - [[RAG_Chunking]] — why chunking is needed before embedding
 - [[RAG_Weaviate]] — storing and querying embeddings in a vector database
+- [[RAG_Transformers]] — embeddings as the first layer of an LLM
+- [[RAG_Advanced_Retrieval]] — cross-encoders, ColBERT, and per-token embeddings
