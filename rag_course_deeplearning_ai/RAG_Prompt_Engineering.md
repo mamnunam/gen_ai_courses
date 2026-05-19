@@ -439,8 +439,219 @@ Key design choices:
 
 ---
 
+## 10. Messages Format and System Prompts
+
+Modern LLM APIs accept a list of role-tagged messages rather than a single string:
+
+```python
+messages = [
+    {"role": "system",    "content": "You are a helpful fashion assistant. Be concise. Cite product IDs."},
+    {"role": "user",      "content": "Suggest a summer outfit."},
+    {"role": "assistant", "content": "..."},  # previous LLM response, when continuing a conversation
+    {"role": "user",      "content": "Make it more formal."},
+]
+```
+
+| Role | Purpose |
+|------|---------|
+| `system` | High-level instructions: persona, tone, constraints, knowledge cutoff, citation rules |
+| `user` | The actual question or request |
+| `assistant` | Previous model responses (for multi-turn continuity) |
+
+### Chat template internals (Llama-style)
+
+Under the hood, the messages list is rendered to a single string with **special tokens** the model was trained to recognize:
+
+```
+<|begin_of_text|>
+<|start_header_id|>system<|end_header_id|>
+You are a helpful fashion assistant. Be concise.
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+Suggest a summer outfit.
+<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+```
+
+The model is trained to generate everything after the final `assistant` header until it emits `<|eot_id|>`. Different model families (Llama, Qwen, Mistral, ChatML/OpenAI) use different templates — most client libraries handle this automatically.
+
+### What goes in a system prompt
+
+Production system prompts can be substantial. As a reference: Anthropic's published Claude system prompt is **~2,100 words**, organized as:
+
+- **Fundamental behavior** — identity, knowledge cutoff, format expectations
+- **Tone and personality** — voice, reasoning style, intellectual curiosity
+- **Safety constraints** — refused content categories, calibration
+
+For a RAG system specifically:
+
+```
+You are a customer-service assistant for [Store].
+Use only the retrieved documents below to answer. If they don't contain the answer,
+say "I don't have that information" rather than guessing.
+
+When you cite a fact, mark it [DOC X] where X is the document number.
+Don't mention you have access to a database.
+```
+
+Three RAG-specific guidance items the course emphasizes:
+
+1. Tell the LLM to **use only retrieved docs** for factual claims.
+2. Tell the LLM to **judge document relevance** — not every retrieved doc is useful.
+3. Tell the LLM to **cite sources** by document number.
+
+---
+
+## 11. Generic Prompt Template Structure
+
+```
+┌──────────────────────────────┐
+│  System Instructions         │  ← persona, rules, formatting
+├──────────────────────────────┤
+│  Conversation History        │  ← prior turns (optional)
+├──────────────────────────────┤
+│  Retrieved Information       │  ← [DOC 1] ... [DOC N]
+├──────────────────────────────┤
+│  User Prompt                 │  ← the current question
+└──────────────────────────────┘
+```
+
+Worked example — geographic-info chatbot:
+
+```python
+messages = [
+    {"role": "system", "content": (
+        "You are a geography assistant. Answer based only on the retrieved documents. "
+        "Cite each fact as [DOC X]. Admit if information is missing."
+    )},
+    # Conversation history (prior turn)
+    {"role": "user",      "content": "What's the capital of Brazil?"},
+    {"role": "assistant", "content": "The capital of Brazil is Brasília [DOC 2]."},
+    # Retrieved context
+    {"role": "user", "content": (
+        "[DOC 1] Brazil — Largest country in South America by area...\n"
+        "[DOC 2] Brasília — Federal capital since 1960, planned by Oscar Niemeyer...\n"
+        "[DOC 3] São Paulo — Most populous city in Brazil...\n\n"
+        "Why was Brasília chosen as the capital?"
+    )}
+]
+```
+
+---
+
+## 12. In-Context Learning Vocabulary
+
+| Term | Meaning |
+|------|---------|
+| **Zero-shot** | No examples — just instructions |
+| **One-shot** | A single labeled example |
+| **Few-shot** | 2–10 labeled examples |
+| **Many-shot** | 10+ examples (large context window required) |
+
+### Retrieved in-context examples (RAG of examples)
+
+Index a corpus of *past Q&A pairs* (e.g., resolved support tickets). At runtime, retrieve the most similar past examples and inject them as few-shot examples.
+
+```python
+def few_shot_with_retrieval(query: str, example_collection) -> list[dict]:
+    examples = example_collection.query.near_text(query, limit=3).objects
+    
+    messages = [{"role": "system", "content": "Resolve customer-service queries."}]
+    for ex in examples:
+        # OpenAI-compatible trick: use 'name' to mark examples as separate from real chat
+        messages.append({"role": "system", "name": "example_user",      "content": ex.properties["question"]})
+        messages.append({"role": "system", "name": "example_assistant", "content": ex.properties["resolution"]})
+    
+    messages.append({"role": "user", "content": query})
+    return messages
+```
+
+The `name` field distinguishes example turns from real conversation history — useful for some models.
+
+---
+
+## 13. Reasoning Patterns
+
+### `<scratchpad>` — explicit thinking
+
+```
+Use a <scratchpad> to think through the problem before answering.
+
+<scratchpad>
+Option 1: Could be X because...
+Option 2: Might be Y if...
+Actually, Z makes the most sense because...
+</scratchpad>
+
+Final answer: Z
+```
+
+Strips the scratchpad block before showing the user. Improves quality on multi-step problems.
+
+### Chain-of-Thought (CoT)
+
+Trigger phrase: *"Let's think step by step."* Encourages the model to generate intermediate reasoning steps before the final answer.
+
+```
+Q: Canada's capital changed in 1857. What city was it before?
+
+[Without CoT]
+A: Toronto. (wrong)
+
+[With CoT — "Let's think step by step."]
+A: Canada's capital before 1857 was the rotating capital arrangement —
+   Kingston, Montreal, Toronto, and Quebec City alternated.
+   In 1857, Queen Victoria chose Ottawa as the permanent capital.
+   So immediately before 1857, the capital was Toronto (the most recent
+   pre-Ottawa capital). Final: Toronto.
+```
+
+### Reasoning models (Claude 3.7+, GPT-o-series, DeepSeek R1, etc.)
+
+These models internalize CoT during training — they emit "reasoning tokens" before the visible answer without needing a prompt trigger. Tradeoffs:
+
+| Pros | Cons |
+|------|------|
+| Higher accuracy on multi-step problems | Slower (extra tokens generated) |
+| Better RAG integration (judge relevance) | More expensive |
+|  | Some prompt techniques (in-context learning) work less well |
+|  | Prefer clear goals + strict output formats |
+
+---
+
+## 14. Context Window Management
+
+Reasoning models + RAG compete for context window:
+
+```
+Regular use:           [Initial Prompt][Response Tokens]
+Reasoning + RAG:       [Initial Prompt][Reasoning Tokens][RAG Documents][Response Tokens]
+```
+
+### Pruning strategies
+
+| Strategy | When to use |
+|----------|-------------|
+| **Drop old messages** | Multi-turn — keep only last N messages |
+| **Drop reasoning tokens from history** | Reasoning models — don't keep the scratchpads of past turns |
+| **Retrieve only relevant chunks for latest question** | Don't carry forward retrieved docs from earlier turns |
+| **Summarize long history** | Replace 20 turns of history with a 3-sentence summary |
+| **Use a long-context model** | Last resort; even with 200k context, efficiency still matters |
+
+```python
+def trim_history(messages: list, keep_last_n: int = 5) -> list:
+    system = [m for m in messages if m["role"] == "system"]
+    rest   = [m for m in messages if m["role"] != "system"]
+    return system + rest[-keep_last_n:]
+```
+
+---
+
 ## See Also
 
 - [[RAG_LLM_Parameters]] — temperature, top_p, and multi-turn conversation
 - [[RAG_Weaviate]] — Weaviate query API used inside these functions
 - [[RAG_Production]] — measuring and reducing the token cost of these prompts
+- [[RAG_Transformers]] — how chat templates and special tokens are processed
+- [[RAG_Hallucinations]] — citation generation and grounding prompts
+- [[RAG_Agentic_RAG]] — multi-LLM workflow patterns built on top of these prompts
