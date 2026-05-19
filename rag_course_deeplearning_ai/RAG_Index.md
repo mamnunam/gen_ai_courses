@@ -6,16 +6,38 @@ A complete reference for Retrieval-Augmented Generation, organized by topic. All
 
 ## Topic Notes
 
+### Foundations
+
 | File | Contents |
 |------|----------|
-| [[RAG_Fundamentals]] | What RAG is, the R→A→G loop, pipeline architecture, helper functions, dataset schemas |
-| [[RAG_Embeddings]] | Embedding models, cosine similarity, Euclidean distance, the 512-token truncation limit, PCA visualization |
-| [[RAG_Retrieval_Methods]] | BM25, semantic search, Reciprocal Rank Fusion (RRF), Precision@K, Recall@K |
-| [[RAG_Chunking]] | Fixed-size, overlap, paragraph, mixed strategies; chunk size tradeoffs; metadata attachment |
-| [[RAG_Weaviate]] | Collections, all four query modes (filter/near_text/BM25/hybrid), reranking, collection management |
-| [[RAG_LLM_Parameters]] | Temperature, top_p, top_k, repetition penalty, parameter recommendations by task, multi-turn chatbot |
-| [[RAG_Prompt_Engineering]] | Few-shot routers, JSON extraction, FAQ/product pipeline, progressive filter relaxation, full chatbot architecture |
-| [[RAG_Production]] | Token cost baseline, prompt optimization (65% reduction), OpenTelemetry + Phoenix tracing, span patterns |
+| [[RAG_Fundamentals]] | What RAG is, the R→A→G loop, LLM internals primer, why retrieval is needed, library analogy, retriever tradeoffs, 5 applications, augmented prompt template |
+| [[RAG_Transformers]] | What's inside an LLM: tokenization, embeddings + position, attention (single & multi-head), feed-forward, layers, next-token prediction, autoregression, encoder vs decoder |
+| [[RAG_Embeddings]] | Embedding models, contrastive training, three distance metrics (cosine, Euclidean, dot product), three embedding levels (word/sentence/document), 512-token truncation, PCA, Kyoto/Asia failure mode |
+
+### Retrieval
+
+| File | Contents |
+|------|----------|
+| [[RAG_Retrieval_Methods]] | BM25 (with TF-IDF derivation, k₁/b parameters), semantic search, RRF (with k intuition), Precision@K, Recall@K, MAP@K, MRR, K-tradeoff narrative |
+| [[RAG_Chunking]] | 8 strategies: fixed-size, overlap, paragraph, mixed, recursive character, semantic, LLM-based, context-aware; Goldilocks framing; metadata attachment |
+| [[RAG_Weaviate]] | All four query modes (filter/near_text/BM25/hybrid), reranking, ANN algorithms (KNN→NSW→HNSW), filter operator cheat sheet, distance metrics |
+| [[RAG_Advanced_Retrieval]] | Query rewriting, NER (GLINER), HyDE, cross-encoders, ColBERT (MaxSim scoring), reranking pipelines, two-stage retrieval |
+
+### Generation
+
+| File | Contents |
+|------|----------|
+| [[RAG_LLM_Parameters]] | Temperature, top_p, top_k, repetition penalty, logit biases, peaked-vs-flat distributions, tuning workflow, multi-turn chatbot |
+| [[RAG_Prompt_Engineering]] | Few-shot routers, JSON extraction, FAQ/product pipeline, progressive filter relaxation, messages format + system prompts, chat templates, scratchpad/CoT, reasoning models, context pruning |
+
+### Reliability & Production
+
+| File | Contents |
+|------|----------|
+| [[RAG_Hallucinations]] | Hallucination types, grounding prompts, citation generation, self-consistency, ContextCite, ALCE benchmark |
+| [[RAG_Evaluation]] | RAGAS (Response Relevancy, Faithfulness), evaluator scope matrix, A/B testing, LLM selection benchmarks (MMLU, LLM Arena, ELO), benchmark saturation |
+| [[RAG_Agentic_RAG]] | Multi-LLM workflows (sequential/conditional/iterative/parallel), RAG vs fine-tuning, cheap-router/expensive-answer pattern |
+| [[RAG_Production]] | Token cost baseline, prompt optimization (65% reduction), OpenTelemetry + Phoenix tracing, evaluator scope, quantization (1-bit, Matryoshka), caching, security, multi-modal RAG |
 
 ---
 
@@ -58,31 +80,79 @@ M5 — Optimization & Observability
 
 ## Glossary
 
+**Agentic RAG** — Multi-LLM workflow where each LLM does one specialized task (routing, evaluation, generation, citation). Patterns: sequential, conditional, iterative, parallel.
+
+**ALCE** — Automatic LLMs' Citation Evaluation benchmark. Tests citation quality, correctness, and fluency.
+
 **Alpha** — Weaviate hybrid search blend parameter. `0.0` = pure BM25, `1.0` = pure vector, `0.5` = equal blend.
+
+**Attention** — Mechanism in a transformer where every token weights every other token's contribution to its meaning. The conceptual heart of the architecture.
 
 **Auto-instrument** — `register(auto_instrument=True)` in Phoenix/OpenTelemetry automatically traces all `openai.chat.completions.create()` calls without extra span code.
 
-**BM25** — Best Match 25. Sparse keyword-based retrieval. Scores documents by term frequency + inverse document frequency. Strong on exact matches and rare terms.
+**Autoregressive** — Each generated token is appended to the input, and the next token is predicted given the full updated sequence.
+
+**Bi-encoder** — Default semantic retriever architecture: query and document are embedded separately, then compared by cosine similarity. Fast but less precise than cross-encoders.
+
+**BM25** — Best Match 25. Sparse keyword-based retrieval. Scores documents by term frequency + inverse document frequency, with two refinements (TF saturation via `k₁`, length normalization via `b`). Strong on exact matches and rare terms.
 
 **Chain** — OpenInference span kind for multi-step orchestration functions (e.g., `answer_query`).
 
+**Chain-of-Thought (CoT)** — Prompting pattern triggering step-by-step reasoning ("Let's think step by step"). Improves quality on multi-step problems.
+
 **Chunking** — Splitting documents into smaller pieces before embedding. Required when text exceeds the embedding model's token limit (512 for `bge-base-en-v1.5`).
+
+**ColBERT** — Contextualized Late Interaction Over BERT. One vector per token; scores via MaxSim (each query token finds its closest doc token; sum maxes). Near-cross-encoder quality at decent speed; high storage cost.
+
+**ContextCite** — Tool that attributes each generated sentence back to retrieved documents. Useful for citation generation and evaluation.
+
+**Context-aware chunking** — LLM-augmented chunking that adds a brief context label to each chunk before embedding. Highest-value chunking improvement.
+
+**Contrastive training** — How embedding models learn: push positive pairs together, pull negative pairs apart in vector space.
 
 **Cosine similarity** — Measures the angle between two vectors: `(A·B) / (‖A‖·‖B‖)`. Range: −1 to 1. Used for embedding comparison; ignores magnitude.
 
+**Cross-encoder** — Reranking architecture: query + document are concatenated and run through the model together. Much higher quality than bi-encoders; doesn't scale beyond ~100 candidates.
+
 **Dense retrieval** — Synonym for semantic search. Queries and documents are both embedded; similarity measured by dot product or cosine distance.
+
+**Dot product** — Third distance metric beyond cosine and Euclidean. Un-normalized form of cosine similarity.
 
 **Embedding** — A fixed-length vector (e.g., 768 dimensions) that encodes semantic meaning. Similar texts → nearby vectors.
 
+**Faithfulness** — RAGAS metric measuring whether response claims are supported by retrieved documents. Primary anti-hallucination metric.
+
 **Few-shot classification** — Prompt pattern that gives the LLM labeled examples + category definitions and asks it to classify a new input in one or two tokens (`temperature=0`, `max_tokens=10`).
 
-**Greedy decoding** — Default generation: always pick the highest-probability next token. Deterministic but repetitive.
+**Fine-tuning** — Adjusting model weights via Supervised Fine-Tuning (SFT) on labeled examples. Teaches *style* and *task patterns* well; teaches new facts poorly. Compare to RAG (knowledge injection).
 
-**HNSW** — Hierarchical Navigable Small World. The approximate nearest-neighbor index algorithm used by Weaviate.
+**GLINER** — Generalist and Lightweight NER model used for query parsing (extracting entities from user queries).
+
+**Greedy decoding** — Default generation: always pick the highest-probability next token. Deterministic but can fall into repetition loops.
+
+**HNSW** — Hierarchical Navigable Small World. Approximate nearest-neighbor index used by Weaviate. Stacks NSW graphs at decreasing sparsity for logarithmic scaling.
+
+**HyDE** — Hypothetical Document Embeddings. Generate a hypothetical answer with an LLM, embed *that*, search with the hypothetical-answer vector. Closes the query-doc domain mismatch.
 
 **Hybrid search** — Combining sparse (BM25) and dense (vector) retrieval, typically via RRF or a weighted blend.
 
 **LLM (Large Language Model)** — The "Generate" step of RAG. Takes the augmented prompt (query + retrieved context) and produces the final answer.
+
+**LLM Arena** — chat.lmsys.org. Pairwise human evaluation of LLMs producing an ELO-style leaderboard.
+
+**LLM-as-judge** — Evaluator pattern where an LLM scores outputs of another LLM. Cheap, flexible, biased toward own model family.
+
+**Logit bias** — Direct per-token override of LLM probabilities. Used to ban tokens or boost classifier labels.
+
+**MAP@K** — Mean Average Precision at K. Captures both how many relevant docs were found *and* ranking quality.
+
+**Matryoshka quantization** — Vector dimensions sorted by information density at training time; use first N dims for fast retrieval, full vector for rerank.
+
+**MMLU** — Massive Multitask Language Understanding benchmark. 57 subjects, multiple choice.
+
+**MRR** — Mean Reciprocal Rank. `1 / (rank of first relevant doc)`, averaged across queries. Right metric when only the top result matters.
+
+**NER** — Named Entity Recognition. Extracting people/places/dates/organizations from queries for use as metadata filters.
 
 **Nucleus sampling** — See *Top-p*.
 
@@ -98,17 +168,31 @@ M5 — Optimization & Observability
 
 **Progressive filter relaxation** — When a filtered Weaviate query returns too few results, iteratively drop filters from least to most important until a sufficient result set is found.
 
+**Quantization** — Compressing float embeddings (or LLM weights) to lower-bit integers. 4-step process: find min/max → divide into N buckets → assign ints → store min + scale.
+
+**Query rewriting** — Using an LLM to clarify/expand an ambiguous user query before retrieval.
+
+**RAGAS** — Python library for RAG evaluation. Key metrics: Response Relevancy, Faithfulness, Context Precision, Context Recall, Noise Sensitivity.
+
+**Reasoning model** — LLM that internalizes Chain-of-Thought during training. Emits "reasoning tokens" before the visible answer. Higher accuracy but slower and pricier.
+
+**Response Relevancy** — RAGAS metric: does the response actually answer the question? Mechanism: generate likely-prompts from the response, compare to actual prompt.
+
 **RAG (Retrieval-Augmented Generation)** — Augmenting an LLM's answer with documents retrieved at query time, rather than relying solely on parametric memory. Reduces hallucinations; enables access to up-to-date or private data.
 
 **Recall@K** — Of all relevant documents, what fraction appear in the top-K retrieved? `|relevant ∩ retrieved| / |relevant|`.
 
 **Recency bias** — LLMs give more weight to text that appears later in the prompt. Exploit this by placing the most relevant retrieved document nearest the query.
 
-**Reciprocal Rank Fusion (RRF)** — Hybrid ranking formula: `Score(d) = Σ 1 / (k + rank_r(d))`, where `k=60`. Merges ranked lists from multiple retrievers without requiring score normalization.
+**Reciprocal Rank Fusion (RRF)** — Hybrid ranking formula: `Score(d) = Σ 1 / (k + rank_r(d))`, where `k=60`. Merges ranked lists from multiple retrievers without requiring score normalization. Score-agnostic.
 
 **Reranking** — A second-pass cross-encoder model that re-scores retrieved results using full attention over (query, document) pairs. More accurate than bi-encoder retrieval but slower.
 
 **Retriever** — OpenInference span kind for vector DB queries.
+
+**Scratchpad** — Prompt pattern asking the LLM to reason inside `<scratchpad>...</scratchpad>` tags before producing the final answer.
+
+**Semantic chunking** — Chunking strategy using cosine similarity between consecutive sentences to detect topic boundaries.
 
 **Semantic search** — Retrieval based on meaning similarity, using embedding vectors and cosine distance. Handles paraphrase and synonymy well; weaker on rare exact-match terms.
 
@@ -283,11 +367,23 @@ def generate_params_dict(
 
 ## See All Notes
 
+### Foundations
 - [[RAG_Fundamentals]]
+- [[RAG_Transformers]]
 - [[RAG_Embeddings]]
+
+### Retrieval
 - [[RAG_Retrieval_Methods]]
 - [[RAG_Chunking]]
 - [[RAG_Weaviate]]
+- [[RAG_Advanced_Retrieval]]
+
+### Generation
 - [[RAG_LLM_Parameters]]
 - [[RAG_Prompt_Engineering]]
+
+### Reliability & Production
+- [[RAG_Hallucinations]]
+- [[RAG_Evaluation]]
+- [[RAG_Agentic_RAG]]
 - [[RAG_Production]]
