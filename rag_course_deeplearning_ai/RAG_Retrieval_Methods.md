@@ -271,8 +271,166 @@ def compute_metrics(queries, embeddings, model, top_k=5):
 
 ---
 
+## How BM25 Got Here — TF-IDF Derivation
+
+BM25 is the 25th refinement in the "Best Matching" series. Conceptually it descends from TF-IDF, walked through in stages:
+
+### Step 1 — Simple scoring
+Count how many query words appear in the document. *Problem:* doesn't reward frequent occurrences.
+
+### Step 2 — Term Frequency (TF)
+Sum frequencies of each query word in the document. *Problem:* favors long documents (more words → more matches by chance).
+
+### Step 3 — Normalized TF
+Divide by total words in the document. *Problem:* common words ("the", "and") dominate.
+
+### Step 4 — TF-IDF
+Multiply TF by **inverse document frequency**:
+
+$$\text{IDF}(\text{word}) = \log \frac{\text{Total docs}}{\text{Docs containing word}}$$
+
+Rare words get high IDF; common words get low IDF. The query *"Making pizza without a pizza oven"* over a 5-doc corpus produces high IDF for `pizza` (in 2/5 → ~0.7) and very low for `a` (in 4/5 → ~0.1). Pizza and oven dominate the score.
+
+### Step 5 — BM25's two refinements
+
+1. **Term frequency saturation** (parameter `k₁`, typical 1.2–2.0): diminishing returns on repeated terms. If `pizza` appearing 10 times scores X, then 20 times scores ~1.3X (not 2X). Prevents one keyword-stuffing document from dominating.
+2. **Document length normalization** (parameter `b`, typical 0.75): penalizes long documents *less* than raw TF-IDF would. With `b=1` you get full normalization; `b=0` you get none.
+
+### Bag-of-words view
+
+BM25 treats each document as a **sparse vector** in vocabulary space — each dimension is a vocabulary term, most dimensions are zero, the rest hold (weighted) frequencies. Visualized as a doc-term matrix where columns are documents and rows are vocabulary words. Hence the name **sparse retrieval**.
+
+---
+
+## More on RRF — Why It Avoids Score Normalization
+
+RRF only cares about **ranks**, not raw scores. This matters because:
+
+- BM25 scores are unbounded and corpus-dependent (one corpus's `0.5` is another's `5.0`).
+- Cosine similarities are bounded `[−1, 1]`.
+- Naive linear combination would require careful normalization per corpus.
+
+By converting to ranks, RRF is **score-agnostic** — it just rewards documents that show up high in *both* lists.
+
+### The `k` parameter intuition
+
+| `k` | Behavior |
+|-----|---------|
+| **k = 0** | Top-ranked dominates: rank-1 score is 10× rank-10 |
+| **k = 60** (default) | Balanced: rank-1 score is ~1.2× rank-10 |
+| **k = 200** | Nearly rank-blind: rank-1 ≈ rank-10 |
+
+So a higher `k` smooths things out — useful when both retrievers are noisy. The default of 60 (from the original RRF paper) works well in practice.
+
+### Beta / alpha — weighted hybrid blending
+
+Some hybrid implementations use a weighted blend instead of RRF:
+
+$$\text{Score}(d) = \beta \cdot \text{semantic}(d) + (1 - \beta) \cdot \text{BM25}(d)$$
+
+- `β = 0` → pure BM25
+- `β = 1` → pure semantic
+- `β = 0.5` → equal blend
+
+In Weaviate this is exposed as the `alpha` parameter on `collection.query.hybrid(...)`. See [[RAG_Weaviate]].
+
+```
+Hybrid search funnel
+────────────────────
+                 ┌── BM25 search ─────► top 50 ┐
+Query ───────────┤                              ├── Filter ──► RRF fusion ──► top K
+                 └── Semantic search ─► top 50 ┘   metadata
+```
+
+---
+
+## Additional Evaluation Metrics
+
+Precision@K and Recall@K are covered above. Two more:
+
+### Mean Average Precision (MAP@K)
+
+For each **relevant** document at rank ≤ K, compute Precision@(its rank). Average across relevant docs to get **Average Precision (AP)** for one query. Average AP across all queries → **MAP**.
+
+```
+Query 1: relevant docs found at ranks 1, 3, 5 → precisions = 1.00, 0.67, 0.60
+                                                AP = (1.00 + 0.67 + 0.60) / 3 = 0.76
+Query 2: relevant docs found at ranks 2 only  → precisions = 0.50
+                                                AP = 0.50
+MAP = (0.76 + 0.50) / 2 = 0.63
+```
+
+MAP captures both **how many** relevant docs you found *and* **how well you ranked them**.
+
+### Mean Reciprocal Rank (MRR)
+
+For each query, find the rank of the **first** relevant document. Reciprocal rank `RR = 1 / rank`. Average across queries → MRR.
+
+| First relevant at rank | RR |
+|------------------------|-----|
+| 1 | 1.0 |
+| 2 | 0.5 |
+| 3 | 0.33 |
+| 5 | 0.2 |
+
+```
+4 queries, first-relevant ranks = [1, 3, 6, 2]
+MRR = (1.0 + 0.33 + 0.17 + 0.5) / 4 = 0.50
+```
+
+MRR is the right metric when the user really only cares about the **top result** (chatbots, FAQs).
+
+### Choosing the right metric
+
+| Metric | Best when… |
+|--------|-----------|
+| **Recall@K** | "Did we find the right document anywhere in the top-K?" — the standard RAG question |
+| **Precision@K** | "Is the context I'm sending to the LLM noisy?" |
+| **MAP@K** | Evaluating *ranking quality* across many relevant docs |
+| **MRR** | First answer matters most (FAQ chatbots, direct Q&A) |
+
+All four require **ground truth** — labeled queries with known relevant documents.
+
+---
+
+## Precision/Recall in Practice — 20 Newsgroups Walkthrough
+
+Concrete numbers from the course's evaluation lab on 20 Newsgroups (500–600 docs per category):
+
+| K | Average Precision | Average Recall | Notes |
+|---|-------------------|---------------|-------|
+| 5 | ~1.00 | ~0.01 | 8/10 queries get perfect precision; recall is ~1% |
+| 20 | ~0.80 | ~0.03 | "Electronics" drops 1.00 → 0.80; recall triples |
+| 50 | ~0.65 | ~0.08 | "Windows OS" drops to 0.60; recall up to ~8% |
+
+Hardest query: *"historical influence of politics on society"* — precision stuck at 0.40–0.52 across all K. Symptom of a query that overlaps multiple categories semantically.
+
+**Takeaway:** for RAG, **K = 5–15** is the sweet spot. You don't need to find every relevant document; you need a small, clean set the LLM can read.
+
+---
+
+## Top-K Compensation Pattern
+
+When comparing chunk strategies of different sizes, equalize the *total context volume* sent to the LLM by adjusting top_k:
+
+```python
+# Short chunks (~25 words each) — fetch 8 to get ~200 words of context
+results_short = collection.query.near_text(query, limit=8,
+                  filters=Filter.by_property("chunking_strategy").equal("fixed_size_25"))
+
+# Long chunks (~100 words each) — fetch 2 to get ~200 words of context
+results_long  = collection.query.near_text(query, limit=2,
+                  filters=Filter.by_property("chunking_strategy").equal("fixed_size_100"))
+```
+
+Without this, strategies are unfairly compared.
+
+---
+
 ## See Also
 
 - [[RAG_Embeddings]] — how embeddings work under the hood
 - [[RAG_Weaviate]] — BM25, semantic, and hybrid search via Weaviate API
 - [[RAG_Prompt_Engineering]] — routing to different retrievers based on query type
+- [[RAG_Advanced_Retrieval]] — query rewriting, HyDE, NER, cross-encoders, ColBERT
+- [[RAG_Evaluation]] — RAGAS metrics and labeled-dataset evaluation
