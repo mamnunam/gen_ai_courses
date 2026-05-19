@@ -240,6 +240,139 @@ Production (M5)
 
 ---
 
+## How LLMs Work (Foundations)
+
+A bit of background that explains why retrieval is needed in the first place.
+
+### LLMs are "fancy autocomplete"
+
+An LLM is trained to predict the next token in a sequence. Generation is **autoregressive** — each predicted token is fed back into the input and the next token is predicted given the new full sequence. The output of running the same prompt twice is therefore not deterministic in general (sampling parameters control how much variation there is — see [[RAG_LLM_Parameters]]).
+
+- **Vocabulary**: roughly 10,000 – 100,000 tokens for modern models. Tokens are pieces of words; compound words and punctuation each take one or more tokens.
+- **Parameters**: billions; updated during training so that the model assigns higher probability to the *actual* next token in training text.
+- **Before training**: outputs are gibberish (e.g., *"Forward to Saturn's dance floor!" she yowled…*). After training: coherent.
+
+### Three reasons LLMs hallucinate
+
+1. **They produce probable sequences, not truthful ones** — training optimizes for statistical pattern-matching, not factual accuracy.
+2. **Knowledge gaps** — when the model has no real data, it generates plausible-sounding filler.
+3. **Truthful ≠ probable** — the most probable next token is not always the most accurate one.
+
+### Three categories of "what LLMs don't know"
+
+1. **Private databases** — internal/confidential data the model never saw at training time.
+2. **Hard-to-access information** — niche or paywalled material with thin web presence.
+3. **Real-time data** — anything after the model's training cutoff.
+
+### Why not just inject everything into the prompt?
+
+Two reasons:
+
+- **Computational cost** — the transformer performs a full attention scan over every token, *each time it generates a new token*. Doubling prompt length more than doubles per-step cost.
+- **Context window limit** — smaller models cap at a few thousand tokens; the largest at a few million. Throwing entire corpora in is impossible and wasteful.
+
+Retrieval lets you inject *only* the relevant documents.
+
+---
+
+## Information Retrieval Background
+
+Long before LLMs, search systems built indexes over document collections. The course frames retrieval with a **library analogy**:
+
+| Library | RAG |
+|---------|-----|
+| Books on many topics | Documents in the database |
+| Shelves / sections | The index |
+| Librarian helps you find a book | The retriever ranks documents |
+
+A good librarian doesn't return *every* book on the topic, nor *just one* — they hand you a small, well-chosen stack. The retriever does the same.
+
+### Retriever tradeoffs
+
+There is no perfect retriever. Every design fights between:
+
+- **Returning too many documents** — wastes the LLM's context window, dilutes signal with noise.
+- **Returning too few** — risk missing the relevant fact entirely.
+- **Imperfect ranking** — relevant documents may not appear in the top positions even when retrieved.
+
+The pragmatic answer is to **monitor, experiment, and iterate** — pick a default retriever (hybrid is the usual choice; see [[RAG_Retrieval_Methods]]), measure precision/recall on labeled queries, and tune from there.
+
+---
+
+## Five Advantages of RAG (explicit)
+
+1. **Injects missing knowledge** — private, niche, or post-cutoff content.
+2. **Reduces hallucinations** — grounds the model in real text.
+3. **Keeps models up to date** — update the corpus, not the weights.
+4. **Enables source citation** — users can verify what produced each claim.
+5. **Focuses the model on generation** — the retriever finds facts; the LLM only has to *write*.
+
+---
+
+## Applications of RAG
+
+| Application | Knowledge base | What retrieval contributes |
+|-------------|---------------|---------------------------|
+| **Code generation** | Codebase (classes, functions, style guides) | Retrieves the right symbol or convention before the model writes new code |
+| **Company chatbots** | Manuals, support guides, FAQs | Grounds answers in real internal policies |
+| **Specialized knowledge** | Legal case files, medical journals, private documents | Adds precision and privacy where general LLMs fail |
+| **AI-summarized search** | The live web | Real-time retrieval of fresh content |
+| **Personalized RAG** | Calendar, email, contacts | The model "knows" your context without it being baked into training |
+
+---
+
+## Motivating Example (used across the course)
+
+The same query asked three different ways highlights when retrieval is needed:
+
+1. *"Why are hotels expensive on the weekend?"* — generic; LLM can answer from training data.
+2. *"Why are hotels in Vancouver super expensive this coming weekend?"* — specific + time-sensitive; LLM has no idea.
+3. *"Why doesn't Vancouver have more hotel capacity close to downtown?"* — requires real-time + local knowledge.
+
+The answer to (2): *"Taylor Swift is performing her Eras Tour in Vancouver this weekend at BC Place Stadium on December 6–8, 2024."* No model trained before that show can produce that fact — retrieval is the only way.
+
+This frames the **two steps of answering questions**:
+
+```
+1. Collect Information   →  Retrieval
+2. Reason & Respond      →  Generation
+```
+
+---
+
+## Standard Augmented Prompt Template
+
+The course's canonical prompt structure (used in the BBC News assignment):
+
+```
+Answer the user query below. There will be provided additional information for you
+to compose your answer.
+
+The relevant information provided is from 2024 and should be added to your overall
+knowledge to answer the query — you should not rely only on this information,
+but add it to your overall knowledge.
+
+Query: {query}
+2024 News: {retrieve_data_formatted}
+```
+
+Document formatting inside `{retrieve_data_formatted}`:
+
+```python
+f"Title: {document['title']}, Description: {document['description']}, " \
+f"Published at: {document['published_at']}\nURL: {document['url']}"
+```
+
+**Design choices baked into this template:**
+
+- Tell the model the context is *supplemental*, not a replacement for its general knowledge.
+- Mark the date so the model treats post-cutoff facts as authoritative.
+- Provide a URL for each doc so the model can cite sources (and the user can verify).
+
+See [[RAG_Prompt_Engineering]] for the FAQ/product-routing variants.
+
+---
+
 ## See Also
 
 - [[RAG_Embeddings]] — how text becomes vectors
@@ -249,3 +382,6 @@ Production (M5)
 - [[RAG_LLM_Parameters]] — controlling LLM output
 - [[RAG_Prompt_Engineering]] — routing, JSON output, chatbot patterns
 - [[RAG_Production]] — cost monitoring, optimization, tracing
+- [[RAG_Transformers]] — what's inside an LLM: attention, FFN, autoregressive generation
+- [[RAG_Hallucinations]] — types of hallucination and how to combat them
+- [[RAG_Evaluation]] — measuring system quality with RAGAS and labeled datasets
